@@ -1,6 +1,8 @@
 /camshotbot.conf
 /latest.jpg
 /Telegram-CamshotBot-*
+/docker-compose.yml
+
 
 !Build/
 .last_cover_stats
