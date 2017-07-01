@@ -5,6 +5,7 @@ requires "Date::Format" => "0";
 requires "Exporter" => "0";
 requires "File::Basename" => "0";
 requires "File::Spec::Functions" => "0";
+requires "Mojo::Base" => "0";
 requires "Mojolicious::Commands" => "0";
 requires "Mojolicious::Lite" => "0";
 requires "Mojolicious::Plugin::JSONConfig" => "0";

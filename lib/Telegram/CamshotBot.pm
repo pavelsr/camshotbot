@@ -30,6 +30,9 @@ String below will output a single image that is continuously overwritten with ne
 
 For more details please see docker-compose.yml.example
 
+!! ATTENTION ! Bot is working correctly only if version of Telegram::CamshotBot >= 0.03.
+There are some critical errors in previous versions, sorry for that.
+
 =head1 ENVIRONMENT VARIABLES
 
 Environment variables are always checked firstly, before any config files
@@ -45,8 +48,11 @@ Actual List (useful for Docker deployment):
   CAMSHOTBOT_FFMPEG_DOCKER
   CAMSHOTBOT_LAST_SHOT_FILENAME
   CAMSHOTBOT_POLLING
+  CAMSHOTBOT_POLLING_TIMEOUT
   CAMSHOTBOT_STREAM_URL
   CAMSHOTBOT_TELEGRAM_API_TOKEN
+  CAMSHOTBOT_TELEGRAM_DEBUG
+  CAMSHOTBOT_WEBTAIL_LOG_FILE
 
 Check more details about their usage at docker-compose.yml.example
 
@@ -87,7 +93,7 @@ print "Using config: ".$config_file_path."\n";
 
 my $config_values = plugin 'JSONConfig' => { file => $config_file_path };
 
-plugin( 'Webtail', file => $config_values->{log_file} ); # https://metacpan.org/pod/Mojolicious::Plugin::Webtail
+  plugin( 'Webtail', file => $ENV{CAMSHOTBOT_WEBTAIL_LOG_FILE} || $config_values->{log_file} ); # https://metacpan.org/pod/Mojolicious::Plugin::Webtail
 
 # BEGIN { $ENV{TELEGRAM_BOTAPI_DEBUG}=1 };
 
@@ -99,8 +105,14 @@ my $stream_url = $ENV{CAMSHOTBOT_STREAM_URL} || $config_values->{stream_url};
 my $ffmpeg_cmd = 'ffmpeg -hide_banner -loglevel panic -i '.$stream_url.' -f image2 -vframes 1 '.$screenshot_file if ($stream_url);
 my ($camera_ip) = ($stream_url  =~ /($RE{net}{IPv4})/) if ($stream_url);
 my $bot_domain = $ENV{VIRTUAL_HOST} || $ENV{LETSENCRYPT_HOST} || $ENV{CAMSHOTBOT_DOMAIN} || $config_values->{bot_domain};
-my $polling_flag = $ENV{CAMSHOTBOT_POLLING} || $config_values->{polling};
-my $docker_flag = $ENV{CAMSHOTBOT_FFMPEG_DOCKER} || $config_values->{ffmpeg_docker};
+my $polling_flag = $ENV{CAMSHOTBOT_POLLING} || $config_values->{polling}; # 0 or not set -> webhook, 1 -> polling
+my $polling_timeout = 3; # default
+if ($polling_flag) {
+  $polling_timeout = $ENV{CAMSHOTBOT_POLLING_TIMEOUT} || $config_values->{polling_timeout};
+} else {
+  $polling_timeout = undef;
+}
+my $docker_flag = $ENV{CAMSHOTBOT_FFMPEG_DOCKER} || $config_values->{ffmpeg_docker}; # any value to send cached image
 
 if ($telegram_token) { # maybe add
   $api = WWW::Telegram::BotAPI->new (
@@ -126,7 +138,7 @@ helper answer => sub {
 
 
   ###### Loggging
-	if ($config_values->{debug}) {
+	if ($ENV{CAMSHOTBOT_TELEGRAM_DEBUG} || $config_values->{debug}) {
 		# full log, convenient if you need to restict chat_id's and check what's wrong
 		app->log->info("Update from Telegram API: ".Dumper $update);
 		app->log->info("Update parsed by Telegram::Bot::Message: ".Dumper $mo);
@@ -192,14 +204,14 @@ helper check_for_updates => sub {
 
 	$h->{updates_in_queue}{update_ids} = \@u_ids;
 
-	$c->setWebhook() if !($config_values->{polling}); # set Webhook again if needed
+	$c->setWebhook() if !($polling_flag); # set Webhook again if needed
 
 	return $h;
 };
 
 helper setWebhook => sub {
 	my $c = shift;
-	return $api->setWebhook({ url => 'https://'.$bot_domain.'/'.$config_values->{telegram_api_token} });
+	return $api->setWebhook({ url => 'https://'.$bot_domain.'/'.$telegram_token });
 };
 
 
@@ -246,9 +258,9 @@ get '/debug' => sub {
 if ($telegram_token && $polling_flag) {
 
 	my $res = $api->deleteWebhook();
-	app->log->info("Webhook was deleted. Starting polling with ".$config_values->{polling_timeout}."secs timeout ...") if $res;
+	app->log->info("Webhook was deleted. Starting polling with ".$polling_timeout."secs timeout ...") if $res;
 
-	Mojo::IOLoop->recurring($config_values->{polling_timeout} => sub {
+	Mojo::IOLoop->recurring($polling_timeout => sub {
 
 		my @updates = @{$api->getUpdates->{result}};
 
@@ -256,6 +268,7 @@ if ($telegram_token && $polling_flag) {
 			for my $u (@updates) {
 				#app->build_controller->answer($u); # Mojolicious::Lite ->  Mojolicious::Controller -> Mojolicious::Helper
         app->answer($u); # Mojolicious::Lite ->  Mojolicious::Controller -> Mojolicious::Helper
+        $api->getUpdates({ offset => $u->{update_id} + 1.0 }); # clear buffer
 			}
 		}
 
@@ -272,6 +285,7 @@ if ($telegram_token) {
   app->log->info("Unprocessed update ids (for offset debug): ".join(',', @{$queue->{update_ids}}) );
 }
 
+push @{app->commands->namespaces}, 'Telegram::CamshotBot::Command';
 app->start;
 
 1;
@@ -279,8 +293,12 @@ app->start;
 
 =head1 DEVELOPMENT
 
-If you want to run unit test without dzil test
+If you want to run unit tests without dzil test
 
-  prove -l -v t  or perl -Ilib
+  prove -l -v t
+
+or
+
+  perl -Ilib
 
 =cut
